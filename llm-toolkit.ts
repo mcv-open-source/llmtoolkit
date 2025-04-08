@@ -34,7 +34,53 @@ export interface LLMToolkitConfig {
   endpoints?: Record<ModelProvider, string>;
   tokenLimit?: number;
   defaultSystemPrompt?: string;
+  useLocalStorage?: boolean; //** Optional use localStorage */
+  storageKeyPrefix?: string;
 }
+
+/* New optional localstorage session management */
+
+class StorageManager {
+  private enabled: boolean;
+  private prefix: string;
+
+  constructor(enabled = false, prefix = 'llmtoolkit:') {
+    this.enabled = enabled;
+    this.prefix = prefix;
+  }
+
+  private safeKey(key: string): string {
+    return `${this.prefix}${key}`;
+  }
+
+  get(key: string): string | null {
+    if (!this.enabled) return null;
+    try {
+      return localStorage.getItem(this.safeKey(key));
+    } catch(e) {
+      console.warn(e, "Unable to fetch items from localStorage")
+      return null;
+    }
+  }
+
+  set(key: string, value: string): void {
+    if (!this.enabled) return;
+    try {
+      localStorage.setItem(this.safeKey(key), value);
+    } catch(e) {
+      console.warn(e, "Unable to save item to localStorage")
+    }
+  }
+
+  remove(key: string): void {
+    if (!this.enabled) return;
+    try {
+      localStorage.removeItem(this.safeKey(key));
+    } catch {}
+  }
+}
+
+/* End of LocalStorage session management class */
 
 const AVERAGE_CHARS_PER_TOKEN = 4;
 
@@ -46,6 +92,8 @@ export class LLMToolkit {
   private conversations: Map<string, Conversation> = new Map();
   private config: LLMToolkitConfig;
   private tokenWarningThreshold: number;
+  private storage: StorageManager;
+
   
   constructor(config: LLMToolkitConfig = {}) {
     this.config = {
@@ -55,8 +103,18 @@ export class LLMToolkit {
       tokenLimit: 18000,
       ...config
     };
+
+    this.storage = new StorageManager(config.useLocalStorage ?? false, config.storageKeyPrefix);
     
     this.tokenWarningThreshold = Math.floor((this.config.tokenLimit || 18000) * 0.80)
+  }
+
+  saveSession(sessionId: string, data: string) {
+    this.storage.set(`session-${sessionId}`, data);
+  }
+
+  loadSession(sessionId: string): string | null {
+    return this.storage.get(`session-${sessionId}`);
   }
 
   private generateId(prefix: string): string {
