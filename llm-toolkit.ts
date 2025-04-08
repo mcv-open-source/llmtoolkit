@@ -51,17 +51,52 @@ export class LLMToolkit {
     this.config = {
       defaultProvider: 'openai',
       defaultModel: 'gpt-3.5-turbo',
-      tokenLimit: 16000,
       defaultSystemPrompt: 'You are a helpful assistant.',
+      tokenLimit: 18000,
       ...config
     };
     
-    this.tokenWarningThreshold = config.tokenLimit || 8500;
+    this.tokenWarningThreshold = Math.floor((this.config.tokenLimit || 18000) * 0.80)
   }
+
+  private generateId(prefix: string): string {
+    try {
+        if (crypto?.randomUUID) {
+            return `${prefix}-${crypto.randomUUID()}`;
+        }
+    } catch (e) {
+        console.warn("crypto.randomUUID not available or failed.");
+    }
+    console.warn("Using insecure fallback ID generation. Consider a UUID library.");
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 9);
+    return `${prefix}-${timestamp}-${random}`;
+  }
+
+  private _addMessage(conversationId: string, role: Message['role'], content: string, metadata?: Record<string, any>): void {
+    const conversation = this.getConversation(conversationId);
+
+    const message: Message = {
+      role,
+      content,
+      timestamp: Date.now(),
+      id: this.generateId(`msg-${role}`)
+    };
+
+    conversation.messages.push(message);
+
+    if (metadata) {
+        conversation.metadata = { ...conversation.metadata, ...metadata };
+    }
+
+    this.updateConversationTokenCount(conversation);
+    this.checkTokenWarning(conversation);
+  }
+
   
   public createConversation(systemPrompt?: string): string {
-    const id = crypto.randomUUID ? crypto.randomUUID() : `conv-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    
+    const id = this.generateId('conv');
+
     const initialMessage: Message = {
       role: 'system',
       content: systemPrompt || this.config.defaultSystemPrompt || '',
@@ -83,58 +118,15 @@ export class LLMToolkit {
   }
   
   public addContext(conversationId: string, content: string, metadata?: Record<string, any>): void {
-    const conversation = this.getConversation(conversationId);
-    
-    const systemMessageIndex = conversation.messages.findIndex(msg => msg.role === 'system');
-    
-    if (systemMessageIndex >= 0) {
-      conversation.messages[systemMessageIndex].content += `\n\n${content}`;
-    } else {
-      conversation.messages.unshift({
-        role: 'system',
-        content,
-        timestamp: Date.now(),
-        id: `msg-system-${Date.now()}`
-      });
-    }
-    
-    this.updateConversationTokenCount(conversation);
-    
-    if (metadata) {
-      conversation.metadata = { ...conversation.metadata, ...metadata };
-    }
-    
-    this.checkTokenWarning(conversation);
+    this._addMessage(conversationId, 'system', content, metadata);
   }
   
   public addUserMessage(conversationId: string, content: string): void {
-    const conversation = this.getConversation(conversationId);
-    
-    const message: Message = {
-      role: 'user',
-      content,
-      timestamp: Date.now(),
-      id: `msg-user-${Date.now()}`
-    };
-    
-    conversation.messages.push(message);
-    this.updateConversationTokenCount(conversation);
-    this.checkTokenWarning(conversation);
+    this._addMessage(conversationId, 'user', content);
   }
   
   public addAssistantMessage(conversationId: string, content: string): void {
-    const conversation = this.getConversation(conversationId);
-    
-    const message: Message = {
-      role: 'assistant',
-      content,
-      timestamp: Date.now(),
-      id: `msg-assistant-${Date.now()}`
-    };
-    
-    conversation.messages.push(message);
-    this.updateConversationTokenCount(conversation);
-    this.checkTokenWarning(conversation);
+    this._addMessage(conversationId, 'assistant', content);    
   }
   
   public getConversation(conversationId: string): Conversation {
@@ -218,7 +210,6 @@ export class LLMToolkit {
     const promises = requests.map(request => 
       this.sendCompletion(request.conversationId, request.userMessage, request.options)
     );
-    
     return Promise.all(promises);
   }
   
